@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import tempfile
-from dummy_main import extract_question_and_model_answer, grade_and_annotate_student  # Direct import!
+from dummy_main import extract_question_and_model_answer, grade_and_annotate_student, extracting_and_merging_marking_criteria
 import traceback
 
 def save_uploaded_file(uploaded_file, temp_dir):
@@ -129,17 +129,31 @@ def main():
                 st.error("❌ JSON files not created!")
                 st.stop()
             
-            progress_bar.progress(50)
+            progress_bar.progress(30)
             
+
+            # Step 3: Merging marking criteria
+            status_text.info("🧩 Extracting and merging marking criteria...")
+            
+            merge_success, merged_model_json = extracting_and_merging_marking_criteria(
+                model_path, answer_pages, model_json
+            )
+
+            if not merge_success:
+                st.warning("⚠️ Failed to extract or merge marking criteria. Continuing with original model answers...")
+            else:
+                st.success("✅ Marking criteria successfully extracted and merged.")
+                model_json = merged_model_json  # Use
+            progress_bar.progress(60)
+
             # Step 3: Grade and annotate
             status_text.info("📝 Grading and annotating student work...")
-            progress_bar.progress(70)
+            
             
             grade_success, grade_message, annotated_path = grade_and_annotate_student(
                 student_path, student_name, questions_json, model_json, 
                 question_num, student_pages, output_dir
             )
-            
             progress_bar.progress(100)
             
             if grade_success:

@@ -186,40 +186,95 @@ map_chain = map_to_questions_prompt | llm
 
 grade_parser = PydanticOutputParser(pydantic_object=GradingList)
 
-
 grade_prompt = ChatPromptTemplate.from_template(
     """
-    You are a professional teacher who grades student answers fairly and accurately against model answers, balancing strictness with reasonable evaluation.
-    Given mappings: {mappings}\nModel answers: {model_data}\nStudent answers: {chunks}\nQuestions: {questions}\n
-    For each question in the model answers, compare the student's answer to the model answers with a focus on content accuracy, wording and semantic meaning.
+    You are a professional examiner who grades student answers **strictly and objectively** according to the provided model data.
+    You must rely entirely on the *explicit* information from the model answers, marking criteria, and annotations.
+    Do not assume, infer, or fabricate any information not present in the model data.
 
-    Award full marks only if all key points are fully and accurately covered; partial answers earn proportional marks according to the given criteria in model data based on the number of correctly and completely addressed points. Accept semantically equivalent phrasing if all details match, but penalize omissions or incomplete ideas. Always assign marks in 0.5 or full number no in between in the fractions.
-    
-    Always use maximum_marks from model_data as the total marks; score must be a fraction or integer out of that total, reflecting exact matches only.
-    If marking criteria in model_data includes per-point breakdowns (e.g., in Unicode like ½ per item), grade each sub-point individually and sum accurately; do not round up.
-    For each question, identify only the correct lines and words that precisely match the model answer's requirements and on which you have allocated the marks.
-    correct_lines: Exact, unaltered lines or full paragraphs/bullets from the student's answer (use same punctuation, wording, and formatting as written by the student). Exclude any question statements, headers, or non-answer text (e.g., lines ending in '?'). Understand each line and if you see that it's a different line than the previous treat it as a different line else keep together.
-    correct_words: 2-6 word phrases extracted directly from the correct_lines, in their exact original order, that capture the core reason for correctness (focus on key terms, facts, or phrases). Use full lines only if the essence can't be captured shorter; phrases must appear verbatim as in the student's text.
-    Add a concise comment: Summarize what was correct (for appreciation if any), exactly what was missing or wrong (be specific to key points omitted), and brief advice. Limit to three lines maximum; cover all aspects for the student to understand the score without fluff.
-    If no student text matches a question (unmapped, missing, or empty in chunks/mappings), strictly score '0', provide feedback explaining what the student should have done, referencing key elements from the model answer to guide improvement. Do not copy or borrow from model answers under any circumstances—treat as absent.
+    ### Input Data
+    - Questions: \n {questions} \n
+    - Model answers and criteria: {model_data}
+    - Mappings: \n {mappings} \n 
+    - Student answers: \n {chunks} \n
+
+    ### Fundamental Rules
+    - You must **not** grade based on wording similarity or keyword matches.
+    - You must **only** use sentence-level or paragraph-level meaning comparisons.
+    - If the meaning or idea in the student’s text does not fully align with the corresponding model point, award **zero** marks for that point.
+    - If the annotation explicitly states partial marks (e.g., “half for each item covered”), you may apply that proportion exactly as written.
+    - If the annotation does *not* mention partial credit, do **not** assign it.
+    - If uncertain whether an idea matches, always choose **zero** — never assume correctness.
+
+    ### Grading Process
+    1. For each question:
+       - Use "maximum_marks" as the absolute total; never exceed it.
+       - Use "marking_criteria" and "annotations" as the sole authority for awarding marks.
+       - Treat each annotation entry as a distinct grading unit — marks are earned **per idea**, not per sentence.
+
+    2. Analyze each annotation point one-by-one (internal verification only)
+       - Internally locate the model answer sentence(s) that define this annotation point. **Do not** copy or output model answer text anywhere in the final JSON or comment.
+       - Convert that model point into a short internal checklist of the distinct conceptual elements required (2–6 items max).
+       - From the student answer, identify up to **3 consecutive** lines (earliest occurrence) that might satisfy this point. If none exist → score 0 for this point.
+       - For each checklist item, mark internally:
+           - YES: the student text explicitly provides this element (quote the exact student phrase as internal evidence), or
+           - NO: the element is missing or incorrect.
+       - **Do not** combine non-consecutive fragments or unrelated sentences to satisfy a single checklist item. Patchwork matches are invalid.
+
+    3. Scoring rules (final decision)
+       - If **any** checklist item = NO → score = 0 for this annotation point (unless the annotation explicitly allows partial credit).
+       - If **all** checklist items = YES:
+           - If annotation specifies fractional/partial marks (e.g., "half for each"), apply that fraction exactly.
+           - If annotation does **not** allow partial credit, award the full marks assigned to that annotation point.
+       - Never invent partial splits beyond those explicitly stated in annotations.
+       - If uncertain at any stage → default to 0 (no guessing).
+
+    4. Evidence selection policy
+       - `correct_lines`: include the exact student lines (up to 3) that directly supported the awarded point. Keep punctuation/formatting identical.
+       - `correct_words`: from those `correct_lines`, include 2–6 word verbatim snippets that show the idea (only if present).
+       - If multiple student lines could match the same annotation, choose the earliest matching consecutive block.
+       - Do not include model-answer text in `correct_lines` or `comment`.
+
+    5. No-leak / no-inference clause
+       - Do not infer unstated facts, complete missing logic, or supply missing premises.
+       - Ambiguous or only-topically-related answers receive 0 unless the annotation explicitly allows partial credit.
+       - Do not defend or justify inferred marks — only produce the JSON with `comment`, `correct_lines`, and `correct_words` as required.
+
+    6. Final verification (internal)
+       - Confirm every awarded mark maps to a single annotation point.
+       - Confirm no annotation point counted twice.
+       - Confirm totals ≤ maximum_marks.
+       - Confirm output will contain no model answer text.
+
+    ### Feedback
+    - `comment`: 2–3 concise lines summarizing:
+        - Which specific ideas or annotations were missing.
+        - One sentence of actionable advice.
+    - Avoid fluff, compliments, or model answer copying.
+
+    ### Special Conditions
+    - If the student's answer is blank, unmapped, or unrelated → score 0.
+    - If any data is missing from student text for that question → treat as unanswered.
+    - Never exceed the “maximum_marks” under any circumstance.
+    - Never use reasoning or details not explicitly in model_data.
 
     ### Output Format
-    Return **only** a single valid JSON object in the following structure (no extra text, no markdown, no explanations):
+    Return **only** a valid JSON object, with no extra commentary, Markdown, or explanations:
 
     {{
-  "grades": [
-    {{
-      "question_number": keep the question number as it is given,
-      "score": Integer or float value as score that student got,
-      "total_marks": Max marks from model answers don't include key like marks and other only integer value,
-      "comment": "string", 
-      "correct_lines": ["string", "string"],
-      "correct_words": ["string", "string"]
+      "grades": [
+        {{
+          "question_number": same as input,
+          "score": <float or integer>,
+          "total_marks": <integer>,
+          "comment": "string",
+          "correct_lines": ["string", "string"],
+          "correct_words": ["string", "string"]
+        }}
+      ]
     }}
-  ]
-}}
-"""
-    )
+    """
+)
 
 grade_chain = grade_prompt | llm_grader
 

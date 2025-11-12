@@ -2,13 +2,14 @@ from langchain_together import ChatTogether
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 import os
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 groq_api = os.getenv("GROQ_API_KEY")
 together_api = os.getenv("TOGETHER_API_KEY")
 openai_api = os.getenv("OPENAI_API_KEY")
-
+client = OpenAI(api_key=openai_api)
 
 # llm_grader = ChatTogether(
 #     # model="openai/gpt-oss-20b",
@@ -18,12 +19,12 @@ openai_api = os.getenv("OPENAI_API_KEY")
 #     max_tokens=80000
 # )
 
-llm_grader = ChatTogether(
-    model="openai/gpt-oss-20b",
-    temperature=0,
-    api_key= together_api,
-    max_tokens=80000
-)
+# llm_grader = ChatTogether(
+#     model="openai/gpt-oss-20b",
+#     temperature=0,
+#     api_key= together_api,
+#     max_tokens=80000
+# )
 
 llm = ChatTogether(
     model="openai/gpt-oss-20b",
@@ -31,3 +32,15 @@ llm = ChatTogether(
     api_key= together_api,
     max_tokens=80000
 )
+
+llm_grader = ChatOpenAI(
+    model="gpt-5-2025-08-07",
+    api_key=openai_api,
+    temperature=0
+)
+
+# llm = ChatOpenAI(
+#     model="gpt-5-mini-2025-08-07",
+#     api_key=openai_api,
+#     temperature=0
+# )
