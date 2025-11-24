@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import tempfile
-from dummy_main import extract_question_and_model_answer, grade_and_annotate_student, extracting_and_merging_marking_criteria
+from main import grade_and_annotate_student, extract_question_text, extract_marking_rubric
 import traceback
 
 def save_uploaded_file(uploaded_file, temp_dir):
@@ -111,8 +111,8 @@ def main():
             status_text.info("🔍 Extracting questions and model answers...")
             progress_bar.progress(30)
             
-            extract_success, questions_json, model_json = extract_question_and_model_answer(
-                question_path, question_pages, model_path, answer_pages, question_num
+            extract_success, questions_json = extract_question_text(
+                question_path, question_pages, question_num
             )
             
             if not extract_success:
@@ -122,36 +122,34 @@ def main():
             
             status_text.success(f"✅ Extracted JSONs:")
             st.write(f"   📄 Questions: {questions_json}")
-            st.write(f"   📄 Model: {model_json}")
             
-            # Verify JSONs exist
-            if not all(os.path.exists(p) for p in [questions_json, model_json]):
-                st.error("❌ JSON files not created!")
+            if not os.path.exists(questions_json):
+                st.error("❌ Questions JSON file not created!")
                 st.stop()
-            
+
             progress_bar.progress(30)
             
 
             # Step 3: Merging marking criteria
             status_text.info("🧩 Extracting and merging marking criteria...")
             
-            merge_success, merged_model_json = extracting_and_merging_marking_criteria(
-                model_path, answer_pages, model_json
+            answer_success, model_path = extract_marking_rubric(
+                model_path, answer_pages
             )
 
-            if not merge_success:
-                st.warning("⚠️ Failed to extract or merge marking criteria. Continuing with original model answers...")
+            if not answer_success:
+                st.error("Failed to extract marking criteria.")
             else:
-                st.success("✅ Marking criteria successfully extracted and merged.")
-                model_json = merged_model_json  # Use
+                st.success("Marking criteria successfully extracted.")
+                # model_json = merged_model_json  # Use
             progress_bar.progress(60)
 
             # Step 3: Grade and annotate
-            status_text.info("📝 Grading and annotating student work...")
+            status_text.info("Grading and annotating student assignment...")
             
             
             grade_success, grade_message, annotated_path = grade_and_annotate_student(
-                student_path, student_name, questions_json, model_json, 
+                student_path, student_name, questions_json, model_path, 
                 question_num, student_pages, output_dir
             )
             progress_bar.progress(100)

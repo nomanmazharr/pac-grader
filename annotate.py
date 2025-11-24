@@ -30,7 +30,7 @@ def insert_wrapped_text(page, x, y, text, max_width, fontsize, color, fontname, 
         for i, line in enumerate(lines):
             y_pos = y + i * line_height
             if y_pos + line_height > y_limit:
-                logger.warning(f"Reached y_limit={y_limit:.2f}, truncating comment")
+                logger.info(f"Reached y_limit={y_limit:.2f}, truncating comment")
                 break
             page.insert_text(
                 (x, y_pos),
@@ -99,7 +99,7 @@ def annotate_correct_lines(doc, correct_lines):
             if isinstance(entry, str) and entry.strip():
                 flat_lines.append(entry.strip())
             else:
-                logger.info(f"Failed to parse entry at index {idx}, skipping.")
+                logger.error(f"Failed to parse entry at index {idx}, skipping.")
 
     logger.info(f"Flattened correct_lines: {len(flat_lines)} lines (from {len(correct_lines)} entries)")
 
@@ -184,7 +184,7 @@ def annotate_correct_lines(doc, correct_lines):
         line_index += 1
 
         if not matched:
-            logger.info(f"Line {line_index} not matched, moving on...")
+            logger.warning(f"Line {line_index} not matched, moving on...")
 
     logger.info("Completed annotation of all lines.")
 
@@ -200,16 +200,16 @@ def underline_correct_words(page, correct_words, page_num):
         try:
             parsed_words = ast.literal_eval(word_entry)
             if not isinstance(parsed_words, list):
-                logger.info(f"Skipping invalid word data: {word_entry}")
+                logger.warning(f"Skipping invalid word data: {word_entry}")
                 continue
         except (ValueError, SyntaxError):
-            logger.warning(f"Failed to parse word data: {word_entry}, skipping.")
+            logger.error(f"Failed to parse word data: {word_entry}, skipping.")
             continue
         
         for correct_word in parsed_words:
             search_text = correct_word.strip()
             if not search_text:
-                logger.info(f"Skipping empty correct word: '{correct_word}'")
+                logger.warning(f"Skipping empty correct word: '{correct_word}'")
                 continue
             
             word_instances = page.search_for(search_text, clip=page.rect)
@@ -258,7 +258,7 @@ def annotate_pdf(input_dir, output_dir, student_name, grades_csv_path):
         grades_df = pd.read_csv(grades_csv_path)
         logger.info(f"Loaded {len(grades_df)} grading records")
     except pd.errors.EmptyDataError:
-        logger.error(f"CSV file is empty: {grades_csv_path}")
+        logger.info(f"CSV file is empty: {grades_csv_path}")
         return False
     except Exception as e:
         logger.error(f"Error loading CSV: {e}")
@@ -352,9 +352,9 @@ def annotate_pdf(input_dir, output_dir, student_name, grades_csv_path):
                             annotated_questions.add(q_num)
                             logger.info(f"Successfully annotated {q_num} on page {page_num + 1}")
                         else:
-                            logger.warning(f"Could not find position for {q_num} on page {page_num + 1}")
+                            logger.info(f"Could not find position for {q_num} on page {page_num + 1}")
                     else:
-                        logger.info(f"Question {q_num} not in grades or already annotated")
+                        logger.warning(f"Question {q_num} not in grades or already annotated")
                 
                 if q_num in comment_dict:
                     comment = comment_dict[q_num]

@@ -10,8 +10,8 @@ import re
 import pandas as pd
 import os
 import datetime
-from logging_config import logger
 from llm_setup import llm, llm_grader
+from logging_config import logger
 
 
 # Pydantic Schemas
@@ -55,6 +55,14 @@ def load_json_data(questions_path, model_answers_path):
         logger.error(f"Error loading JSON data: {e}")
         raise
 
+def save_json(data, filename, folder="test_assignments_and_mappings"):
+    """Save Python dict or list to a JSON file."""
+    os.makedirs(folder, exist_ok=True)
+    file_path = os.path.join(folder, filename)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+    logger.info(f" Saved JSON to {file_path}")
+
 def extract_page_text(pdf_path: str, page_num: int) -> str:
     """
     Extracts text from a specific page of the PDF using PyMuPDF.
@@ -71,7 +79,7 @@ def extract_page_text(pdf_path: str, page_num: int) -> str:
         text = re.sub(r"Word Processing area.*?- use the shortcut keys to copy from the spreadsheet\s*", "", text)
         return text.strip()
     except Exception as e:
-        print(f"Error extracting text from page {page_num}: {e}")
+        logger.error(f"Error extracting text from page {page_num}: {e}")
         return ""
 
 def extract_answers(pdf_path: str, question_num: str, page_nums: List[int]) -> Dict:
@@ -189,7 +197,7 @@ grade_parser = PydanticOutputParser(pydantic_object=GradingList)
 grade_prompt = ChatPromptTemplate.from_template(
     """
     You are a professional examiner who grades student answers **strictly and objectively** according to the provided model data.
-    You must rely entirely on the *explicit* information from the model answers, marking criteria, and annotations.
+    You must rely entirely on the *explicit* information from the model answers and marking criteria.
     Do not assume, infer, or fabricate any information not present in the model data.
 
     ### Input Data
@@ -209,12 +217,12 @@ grade_prompt = ChatPromptTemplate.from_template(
     ### Grading Process
     1. For each question:
        - Use "maximum_marks" as the absolute total; never exceed it.
-       - Use "marking_criteria" and "annotations" as the sole authority for awarding marks.
-       - Treat each annotation entry as a distinct grading unit — marks are earned **per idea**, not per sentence.
+       - Use "marking_criteria" as the sole authority for awarding marks.
+       - Follow marking criteria to have an understanding of how many marks each point or para carry.
 
     2. Analyze each annotation point one-by-one (internal verification only)
        - Internally locate the model answer sentence(s) that define this annotation point. **Do not** copy or output model answer text anywhere in the final JSON or comment.
-       - Convert that model point into a short internal checklist of the distinct conceptual elements required (2–6 items max).
+       - Convert that model point into a short internal checklist of the distinct conceptual elements required (2-6 items max).
        - From the student answer, identify up to **3 consecutive** lines (earliest occurrence) that might satisfy this point. If none exist → score 0 for this point.
        - For each checklist item, mark internally:
            - YES: the student text explicitly provides this element (quote the exact student phrase as internal evidence), or
@@ -226,7 +234,7 @@ grade_prompt = ChatPromptTemplate.from_template(
        - If **all** checklist items = YES:
            - If annotation specifies fractional/partial marks (e.g., "half for each"), apply that fraction exactly.
            - If annotation does **not** allow partial credit, award the full marks assigned to that annotation point.
-       - Never invent partial splits beyond those explicitly stated in annotations.
+       - Never invent partial splits beyond those explicitly stated in marking criteria.
        - If uncertain at any stage → default to 0 (no guessing).
 
     4. Evidence selection policy
@@ -245,10 +253,11 @@ grade_prompt = ChatPromptTemplate.from_template(
        - Confirm no annotation point counted twice.
        - Confirm totals ≤ maximum_marks.
        - Confirm output will contain no model answer text.
+       - Always answer in 0.5 or full like 1 never in between.
 
     ### Feedback
     - `comment`: 2–3 concise lines summarizing:
-        - Which specific ideas or annotations were missing.
+        - Which specific ideas or points were missing.
         - One sentence of actionable advice.
     - Avoid fluff, compliments, or model answer copying.
 
@@ -276,13 +285,13 @@ grade_prompt = ChatPromptTemplate.from_template(
     """
 )
 
+
 grade_chain = grade_prompt | llm_grader
 
-def grade_student(input_dir, student_name, questions_path, model_answers_path, question_number, student_pages):
+def grade_student(student_pdf_path, student_name, questions_path, model_answers_path, question_number, student_pages):
     """Grade a student's PDF and save results to CSV."""
     try:
         # student_pdf_path = os.path.join(input_dir, f"{student_name}.pdf")
-        student_pdf_path = input_dir
         if not os.path.exists(student_pdf_path):
             logger.error(f"Student PDF not found: {student_pdf_path}")
             return None
@@ -298,6 +307,7 @@ def grade_student(input_dir, student_name, questions_path, model_answers_path, q
         questions, model_data = load_json_data(questions_path, model_answers_path)
    
         student_chunks = extract_answers(student_pdf_path, question_number, student_pages)
+        save_json(student_chunks, f'{student_name}_data.json')
         logger.info(f"Loaded student assignment data for question number: {question_number}")
         logger.info(f"Student's Assignment: {student_chunks}")
 
@@ -313,6 +323,7 @@ def grade_student(input_dir, student_name, questions_path, model_answers_path, q
         
         # print(map_output)
         parsed_output = json.loads(map_output.content)
+        save_json(parsed_output, f'{student_name}_mappings.json')
         logger.info(f"Mapped question number to the student assignments: {parsed_output}")
         # Now you can access the "mappings" list
         mappings = parsed_output["mappings"]
