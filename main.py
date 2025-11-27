@@ -89,7 +89,7 @@ def grade_and_annotate_student(
 
         # === 2. Annotation ===
         logger.info(f"Creating annotated PDF for {student_name}...")
-        annotation_ok = annotate_pdf(student_pdf_path, output_dir, student_name, grades_csv_path)
+        annotation_ok = annotate_pdf(student_pdf_path, output_dir, student_name, grades_csv_path, student_pages)
 
         annotated_pdf = os.path.join(student_dir, f"{student_name.lower()}_annotated.pdf")
 
