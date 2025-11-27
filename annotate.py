@@ -5,46 +5,48 @@ import re
 import os
 from logging_config import logger
 
-def insert_wrapped_text(page, x, y, text, max_width, fontsize, color, fontname, y_limit):
-    """Insert wrapped text at (x,y), clipped so it won't cross y_limit."""
-    try:
-        font = fitz.Font(fontname=fontname)
-        words = text.split()
-        current_line = ""
-        lines = []
-        line_height = fontsize + 2
-
-        for word in words:
-            test_line = current_line + (" " if current_line else "") + word
-            width = font.text_length(test_line, fontsize=fontsize)
-            if width <= max_width:
-                current_line = test_line
+def underline_correct_words(page, correct_words, page_num):
+    logger.info(f"Starting underline annotation → Page {page_num + 1}")
+    
+    total_underlined = 0
+    for word_entry in correct_words:
+        try:
+            parsed_words = ast.literal_eval(word_entry)
+            if not isinstance(parsed_words, list):
+                logger.debug(f"Skipping invalid word data (not list): {word_entry}")
+                continue
+        except (ValueError, SyntaxError) as e:
+            logger.debug(f"Failed to parse word entry: {word_entry} | Error: {e}")
+            continue
+        
+        for correct_word in parsed_words:
+            search_text = correct_word.strip()
+            if not search_text:
+                continue
+            
+            word_instances = page.search_for(search_text, clip=page.rect)
+            
+            if not word_instances:
+                logger.debug(f"Not found on page {page_num + 1}: '{search_text}'")
             else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
+                logger.info(f"Underlined: '{search_text}' ({len(word_instances)}×) → Page {page_num + 1}")
+                for inst in word_instances:
+                    try:
+                        x0, y0, x1, y1 = inst
+                        underline_y = y1 + 2
+                        page.draw_line(
+                            (x0, underline_y),
+                            (x1, underline_y),
+                            color=(1, 0, 0),
+                            width=1.5,
+                            overlay=True
+                        )
+                        total_underlined += 1
+                    except Exception as e:
+                        logger.error(f"Error drawing underline for '{search_text}': {e}")
 
-        inserted = 0
-        for i, line in enumerate(lines):
-            y_pos = y + i * line_height
-            if y_pos + line_height > y_limit:
-                logger.info(f"Reached y_limit={y_limit:.2f}, truncating comment")
-                break
-            page.insert_text(
-                (x, y_pos),
-                line,
-                fontsize=fontsize,
-                color=color,
-                fontname=fontname,
-                overlay=True,
-            )
-            inserted += 1
+    logger.info(f"Completed underlines → Page {page_num + 1} | Total: {total_underlined}")
 
-        logger.info(f"Inserted {inserted}/{len(lines)} wrapped lines at x={x}, y_start={y}, clipped at y_limit={y_limit}")
-    except Exception as e:
-        logger.error(f"Error inserting wrapped text: {e}")
 
 def insert_tick(page, x0, y0, placed_ticks):
     """Insert tick at the start of a line using the first word's y0."""
@@ -72,321 +74,215 @@ def insert_tick(page, x0, y0, placed_ticks):
         logger.error(f"Error inserting tick: {e}")
         return False
 
-def annotate_correct_lines(doc, correct_lines):
-    """
-    Annotate correct lines with tick marks across the whole document.
-    Uses cross-page lookahead before falling back to word chunks.
-    Advances page pointer forward (never goes back).
-    """
-    logger.info("Starting tick annotation for entire document")
-
-    # --- Flatten the question-based stringified lists into a list of actual lines ---
+def create_line_annotator(correct_lines):
     flat_lines = []
-    for idx, entry in enumerate(correct_lines):
+    for entry in correct_lines:
         try:
             parsed = ast.literal_eval(entry)
             if isinstance(parsed, list):
-                for ln in parsed:
-                    if isinstance(ln, str) and ln.strip():
-                        flat_lines.append(ln.strip())
+                flat_lines.extend([ln.strip() for ln in parsed if ln.strip()])
             elif isinstance(parsed, str) and parsed.strip():
                 flat_lines.append(parsed.strip())
-            else:
-                # not a list or string we can use
-                logger.info(f"Skipping invalid parsed entry at index {idx}: {entry}")
-        except (ValueError, SyntaxError):
-            # If parsing fails, fall back to using the raw entry if it's a non-empty string
+        except:
             if isinstance(entry, str) and entry.strip():
                 flat_lines.append(entry.strip())
-            else:
-                logger.error(f"Failed to parse entry at index {idx}, skipping.")
 
-    logger.info(f"Flattened correct_lines: {len(flat_lines)} lines (from {len(correct_lines)} entries)")
+    logger.info(f"Line annotator ready → {len(flat_lines)} correct lines loaded")
 
-    placed_ticks = set()
     line_index = 0
-    total_lines = len(flat_lines)
-    page_num = 0  # start from first page
+    placed_ticks = set()
 
-    while line_index < total_lines and page_num < len(doc):
-        # now take the actual single line to search
-        line = flat_lines[line_index]
+    def annotate_on_page_and_beyond(page, page_num, doc):
+        nonlocal line_index
+        ticks_this_page = 0
 
-        search_text = line[:50].strip()
-        if not search_text:
-            logger.info(f"Skipping empty line at index {line_index}: {line}")
-            line_index += 1
-            continue
+        while line_index < len(flat_lines):
+            line = flat_lines[line_index]
+            search_text = line[:50].strip()
+            if not search_text:
+                line_index += 1
+                continue
 
-        matched = False
+            matched = False
 
-        # --- Try current page
-        page = doc[page_num]
-        instances = page.search_for(search_text, clip=page.rect)
-        if instances:
-            logger.info(f"Exact match for '{search_text}' on page {page_num+1}")
-            x0, y0, x1, y1 = instances[0]
-            line_key = round((y0 + y1) / 2, 1)
-            if line_key not in placed_ticks:
-                insert_tick(page, x0, y0, placed_ticks)
-                placed_ticks.add(line_key)
-            matched = True
+            # Try current page
+            if page.search_for(search_text):
+                instances = page.search_for(search_text)
+                x0, y0, _, _ = instances[0]
+                if insert_tick(page, x0, y0, placed_ticks):
+                    ticks_this_page += 1
+                matched = True
+                line_index += 1
+                continue
 
-        # --- Lookahead: search future pages (only if not matched on current page)
-        if not matched:
-            for next_page in range(page_num+1, len(doc)):
-                instances = doc[next_page].search_for(search_text, clip=doc[next_page].rect)
-                if instances:
-                    logger.info(f"Exact match for '{search_text}' found on future page {next_page+1}")
-                    x0, y0, x1, y1 = instances[0]
-                    line_key = round((y0 + y1) / 2, 1)
-                    if line_key not in placed_ticks:
-                        insert_tick(doc[next_page], x0, y0, placed_ticks)
-                        placed_ticks.add(line_key)
+            # Look ahead
+            for pn in range(page_num + 1, len(doc)):
+                if doc[pn].search_for(search_text):
+                    inst = doc[pn].search_for(search_text)[0]
+                    if insert_tick(doc[pn], inst.x0, inst.y0, placed_ticks):
+                        ticks_this_page += 1
+                    line_index += 1
                     matched = True
-                    page_num = next_page  # 🚀 jump forward to this page
                     break
 
-
-        if not matched:
-            for fallback_page in [page_num, page_num + 1]:
-                if fallback_page >= len(doc):
-                    continue  # no page to check
-
-                fb_page = doc[fallback_page]
-                logger.info(f"No exact match for '{search_text}', trying fallback word-by-word on page {fallback_page+1}")
-
-                words_in_line = re.findall(r'\b\w+\b', search_text)
-                word_hits = []
-
-                for word in words_in_line:
-                    instances = fb_page.search_for(word, clip=fb_page.rect)
-                    if instances:
-                        word_hits.append(instances[0])
-
-                    if len(word_hits) >= 4:  # ✅ require at least 4 words
-                        # Use the Y position of the first hit as anchor
-                        logger.info(f"Fallback word match success for '{search_text}' on page {fallback_page+1}")
-                        x0, y0, x1, y1 = word_hits[0]
-                        line_key = round((y0 + y1) / 2, 1)
-                        if line_key not in placed_ticks:
-                            insert_tick(fb_page, x0, y0, placed_ticks)
-                            placed_ticks.add(line_key)
+            if not matched:
+                # Fallback word matching (simplified)
+                words = re.findall(r'\b\w+\b', search_text)
+                for pn in [page_num, page_num + 1]:
+                    if pn >= len(doc):
+                        break
+                    test_page = doc[pn]
+                    hits = [test_page.search_for(w) for w in words if test_page.search_for(w)]
+                    if len(hits) >= 4:
+                        x0, y0 = hits[0][0].x0, hits[0][0].y0
+                        if insert_tick(test_page, x0, y0, placed_ticks):
+                            ticks_this_page += 1
+                        line_index += 1
                         matched = True
-                        page_num = fallback_page  # 🚀 update current page if fallback was on next page
-                        logger.info(f"Fallback word match success for '{search_text}' on page {fallback_page+1}")
                         break
 
-                if matched:
-                    break
+            if not matched:
+                logger.debug(f"Line not found: {search_text}")
+                line_index += 1
 
-        # Move to next flat line
-        line_index += 1
+        logger.info(f"Page {page_num + 1}: {ticks_this_page} ticks placed | Progress: {line_index}/{len(flat_lines)}")
+        return line_index >= len(flat_lines)
 
-        if not matched:
-            logger.warning(f"Line {line_index} not matched, moving on...")
-
-    logger.info("Completed annotation of all lines.")
-
-        # Don't auto-increment page_num unless explicitly jumped
-    logger.info(f"Completed annotation: {line_index}/{total_lines} lines processed.")
+    return annotate_on_page_and_beyond
 
 
-def underline_correct_words(page, correct_words, page_num):
-    """Underline specific words or phrases from the correct_words list."""
-    logger.info(f"Starting underline annotation for page {page_num + 1}")
-    
-    for word_entry in correct_words:
-        try:
-            parsed_words = ast.literal_eval(word_entry)
-            if not isinstance(parsed_words, list):
-                logger.warning(f"Skipping invalid word data: {word_entry}")
-                continue
-        except (ValueError, SyntaxError):
-            logger.error(f"Failed to parse word data: {word_entry}, skipping.")
-            continue
-        
-        for correct_word in parsed_words:
-            search_text = correct_word.strip()
-            if not search_text:
-                logger.warning(f"Skipping empty correct word: '{correct_word}'")
-                continue
-            
-            word_instances = page.search_for(search_text, clip=page.rect)
-            
-            if not word_instances:
-                logger.info(f"No exact match for phrase: '{search_text}' on page {page_num}.")
+def insert_wrapped_text(page, x, y, text, max_width, fontsize, color, fontname, y_limit):
+    if not text.strip():
+        return
+    try:
+        lines = []
+        words = text.split()
+        current = ""
+        for word in words:
+            test = current + (" " if current else "") + word
+            if fitz.get_text_length(test, fontsize=fontsize) <= max_width:
+                current = test
             else:
-                logger.info(f"Found exact match for '{search_text}' ({len(word_instances)} instances).")
-                for inst in word_instances:
-                    try:
-                        x0, y0, x1, y1 = inst
-                        underline_y = y1 + 2
-                        page.draw_line(
-                            (x0, underline_y),
-                            (x1, underline_y),
-                            color=(1, 0, 0),
-                            width=1.5,
-                            overlay=True
-                        )
-                        logger.info(f"Underlined '{search_text}' at ({x0}, {underline_y}) to ({x1}, {underline_y}) on page {page_num}.")
-                    except Exception as e:
-                        logger.error(f"Error underlining '{search_text}': {e}")
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
 
-    logger.info(f"Completed underline annotation for page {page_num + 1}")
+        for i, line in enumerate(lines):
+            y_pos = y + i * (fontsize + 2)
+            if y_pos + fontsize > y_limit:
+                logger.debug(f"Comment truncated at y_limit={y_limit:.1f}")
+                break
+            page.insert_text((x, y_pos), line, fontsize=fontsize, color=color,
+                             fontname=fontname, overlay=True)
+        logger.info(f"Comment inserted → {len(lines)} lines at x={x}")
+    except Exception as e:
+        logger.error(f"Failed to insert wrapped text: {e}")
 
-def annotate_pdf(input_dir, output_dir, student_name, grades_csv_path):
-    """Annotate PDF with scores, comments, ticks, and underlines."""
-    # input_pdf_path = os.path.join(input_dir, f"{student_name}.pdf")
+
+def annotate_comments_and_scores(page, page_num, doc, score_dict, comment_dict):
+    logger.info(f"Adding scores & comments → Page {page_num + 1}")
+    text = page.get_text("text")
+    if not text.strip():
+        logger.info("No text on page, skipping comments")
+        return
+
+    matches = list(re.finditer(r'(?<!\d)\d+\.\d+(?:\([a-z]\))?(?!\d)', text))
+    if not matches:
+        logger.info("No question numbers found")
+        return
+
+    questions = []
+    for m in matches:
+        q = m.group(0)
+        if page.search_for(q):
+            questions.append((q, page.search_for(q)[0].y0))
+
+    questions.sort(key=lambda x: x[1])
+
+    for i, (q_num, y0) in enumerate(questions):
+        y1 = questions[i+1][1] if i+1 < len(questions) else page.rect.height
+        nearby = page.get_text("text", clip=fitz.Rect(0,y0-30,page.rect.width,y0+30))
+        # if any(k in nearby.lower() for k in ['total', 'marks', 'score', '/']):
+        #     continue
+
+        # Score
+        if q_num in score_dict:
+            score_text = score_dict[q_num]
+            page.insert_text((page.search_for(q_num)[0].x0 - 40, y0 + 8),
+                             score_text, fontsize=12, color=(0,0,1))
+            logger.info(f"Score added: {q_num} → {score_text}")
+
+        # Comment
+        if q_num in comment_dict:
+            comment = str(comment_dict[q_num]).strip()
+            if comment and comment.lower() not in ['nan', 'none', '']:
+                insert_wrapped_text(page, page.rect.width - 95, y0 + 5, comment,
+                                    max_width=90, fontsize=8, color=(1,0,0),
+                                    fontname="helv", y_limit=y1 - 10)
+                logger.info(f"Comment added for Q{q_num}")
+
+
+def annotate_pdf(input_dir, output_dir, student_name, grades_csv_path, student_pages=None):
+    logger.info(f"Starting annotation for: {student_name}")
     input_pdf_path = input_dir
-
     student_lower = student_name.lower()
     output_pdf_path = os.path.join(output_dir, student_lower, f"{student_lower}_annotated.pdf")
-    
-    logger.info(f"Starting annotation process for {input_pdf_path}")
-    
+    os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
+
     if not os.path.exists(input_pdf_path):
-        logger.error(f"Input PDF not found: {input_pdf_path}")
+        logger.error(f"PDF not found: {input_pdf_path}")
         return False
-    
     if not os.path.exists(grades_csv_path):
-        logger.error(f"Grades CSV not found: {grades_csv_path}")
+        logger.error(f"CSV not found: {grades_csv_path}")
         return False
-    
+
     try:
-        logger.info(f"Loading grades from {grades_csv_path}")
         grades_df = pd.read_csv(grades_csv_path)
         logger.info(f"Loaded {len(grades_df)} grading records")
-    except pd.errors.EmptyDataError:
-        logger.info(f"CSV file is empty: {grades_csv_path}")
-        return False
     except Exception as e:
-        logger.error(f"Error loading CSV: {e}")
+        logger.error(f"Failed to load CSV: {e}")
         return False
 
     correct_lines = grades_df['correct_lines'].dropna().tolist()
     correct_words = grades_df['correct_words'].dropna().tolist()
-    logger.info(f"Loaded {len(correct_lines)} correct lines and {len(correct_words)} correct words from CSV")
-    
-    try:
-        logger.info(f"Opening PDF: {input_pdf_path}")
-        doc = fitz.open(input_pdf_path)
-        logger.info(f"PDF opened with {len(doc)} pages")
-    except Exception as e:
-        logger.error(f"Error opening PDF: {e}")
-        return False
-    
-    try:
-        logger.info("Creating score dictionary from grades")
-        score_dict = {str(row['question_number']): f"{row['score']}/{row['total_marks']}" for _, row in grades_df.iterrows()}
-        logger.info(f"Score dictionary created with {len(score_dict)} entries")
-        
-        comment_dict = {str(row['question_number']): row.get('comment', '') for _, row in grades_df.iterrows()}
-        
-        for page_num in range(len(doc)):
-            logger.info(f"Processing page {page_num + 1}")
-            page = doc[page_num]
-            
-            logger.info("Extracting text from page")
-            text_on_page = page.get_text("text")
-            logger.info(f"Extracted {len(text_on_page)} characters of text")
-            
-            text_blocks = page.get_text("dict")["blocks"]
-            
-            logger.info("Searching for question numbers")
-            question_pattern = r'(?<!\d)\d+\.\d+(?:\([a-z]\))?(?!\d)'
-            question_matches = list(re.finditer(question_pattern, text_on_page))
-            logger.info(f"Found {len(question_matches)} potential question matches")
-            
-            question_positions = []
-            for m in question_matches:
-                q_num = m.group(0)
-                rects = page.search_for(q_num)
-                if rects:
-                    y0 = rects[0].y0
-                    start_pos = m.start()
-                    question_positions.append((q_num, y0, start_pos))
-                    logger.info(f"Matched {q_num} at y={y0:.2f}")
-            
-            question_positions.sort(key=lambda x: x[1])
-            
-            annotated_questions = set()
-            
-            for i, (q_num, y0, start_pos) in enumerate(question_positions):
-                y1 = (question_positions[i+1][1] 
-                      if i+1 < len(question_positions) else page.rect.height)
-                
-                line_start = text_on_page.rfind('\n', 0, start_pos) + 1
-                line_end = text_on_page.find('\n', start_pos)
-                if line_end == -1:
-                    line_end = len(text_on_page)
-                surrounding_text = text_on_page[line_start:line_end].strip()
-                logger.info(f"Surrounding text on same line: '{surrounding_text}'")
-                
-                if any(keyword in surrounding_text.lower() for keyword in ['marks', '/', 'score', 'total']):
-                    logger.info(f"Skipping {q_num} as it appears to be a score")
-                else:
-                    if q_num in score_dict and q_num not in annotated_questions:
-                        logger.info(f"Annotating {q_num} with score {score_dict[q_num]}")
-                        text_instances = page.search_for(q_num)
-                        if text_instances:
-                            inst = text_instances[0]
-                            
-                            x_offset = -40
-                            text_x = inst.x0 + x_offset
-                            text_y = inst.y0 + 10
-                            
-                            score_text = score_dict[q_num]
-                            page.insert_text(
-                                (text_x, text_y),
-                                score_text,
-                                fontsize=12,
-                                color=(0, 0, 1)
-                            )
-                            
-                            tw = fitz.TextWriter(page.rect)
-                            tw.append((text_x, text_y), score_text)
-                            text_rect = tw.rect
-                            tw = None
-                            
-                            annotated_questions.add(q_num)
-                            logger.info(f"Successfully annotated {q_num} on page {page_num + 1}")
-                        else:
-                            logger.info(f"Could not find position for {q_num} on page {page_num + 1}")
-                    else:
-                        logger.warning(f"Question {q_num} not in grades or already annotated")
-                
-                if q_num in comment_dict:
-                    comment = comment_dict[q_num]
-                    logger.info(f"Annotating {q_num} between y={y0:.2f} and y={y1:.2f} with comment: {comment}")
-                    x_left = page.rect.width - 90
-                    max_width = 90
-                    insert_wrapped_text(
-                        page,
-                        x_left,
-                        y0,
-                        comment,
-                        max_width=max_width,
-                        fontsize=8,
-                        color=(1, 0, 0),
-                        fontname="helv",
-                        y_limit=y1 - 5
-                    )
-            
-            
-            if correct_words:
-                underline_correct_words(page, correct_words, page_num)
-        
-        if correct_lines:
-                annotate_correct_lines(doc, correct_lines)
+    logger.info(f"Loaded {len(correct_lines)} correct lines, {len(correct_words)} correct words")
 
-        logger.info(f"Saving annotated PDF to {output_pdf_path}")
-        os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
+    score_dict = {str(r['question_number']): f"{r['score']}/{r['total_marks']}" for _, r in grades_df.iterrows()}
+    comment_dict = {str(r['question_number']): r.get('comment', '') for _, r in grades_df.iterrows()}
+
+    try:
+        doc = fitz.open(input_pdf_path)
+        logger.info(f"PDF opened → {len(doc)} pages")
+    except Exception as e:
+        logger.error(f"Cannot open PDF: {e}")
+        return False
+
+    pages_to_process = range(len(doc)) if student_pages is None else [p-1 for p in student_pages if 1 <= p <= len(doc)]
+    annotate_lines_progressively = create_line_annotator(correct_lines)
+
+    for page_num in pages_to_process:
+        logger.info(f"Processing page {page_num + 1}/{len(doc)}")
+        page = doc[page_num]
+
+        if correct_words:
+            underline_correct_words(page, correct_words, page_num)
+
+        if correct_lines:
+            done = annotate_lines_progressively(page, page_num, doc)
+            if done:
+                logger.info("All correct lines annotated early")
+                # optionally break
+
+        annotate_comments_and_scores(page, page_num, doc, score_dict, comment_dict)
+
+    try:
         doc.save(output_pdf_path)
-        logger.info(f"Annotation process completed. Saved as {output_pdf_path}")
+        logger.info(f"SUCCESS → Annotated PDF saved: {output_pdf_path}")
+        doc.close()
         return True
     except Exception as e:
-        logger.error(f"Error during annotation: {e}")
-        return False
-    finally:
+        logger.critical(f"Failed to save PDF: {e}")
         doc.close()
+        return False
