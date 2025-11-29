@@ -210,8 +210,8 @@ grade_prompt = ChatPromptTemplate.from_template(
     - You must **not** grade based on wording similarity or keyword matches.
     - You must **only** use sentence-level or paragraph-level meaning comparisons.
     - If the meaning or idea in the student’s text does not fully align with the corresponding model point, award **zero** marks for that point.
-    - If the annotation explicitly states partial marks (e.g., “half for each item covered”), you may apply that proportion exactly as written.
-    - If the annotation does *not* mention partial credit, do **not** assign it.
+    - If the marking criteria explicitly states partial marks (e.g., “half for each item covered”), you may apply that proportion exactly as written.
+    - If the marking criteria does *not* mention partial credit, do **not** assign it.
     - If uncertain whether an idea matches, always choose **zero** — never assume correctness.
 
     ### Grading Process
@@ -220,8 +220,8 @@ grade_prompt = ChatPromptTemplate.from_template(
        - Use "marking_criteria" as the sole authority for awarding marks.
        - Follow marking criteria to have an understanding of how many marks each point or para carry.
 
-    2. Analyze each annotation point one-by-one (internal verification only)
-       - Internally locate the model answer sentence(s) that define this annotation point. **Do not** copy or output model answer text anywhere in the final JSON or comment.
+    2. Analyze each marking criteria point one-by-one (internal verification only)
+       - Internally locate the model answer sentence(s) that define this criteria point. **Do not** copy or output model answer text anywhere in the final JSON or comment.
        - Convert that model point into a short internal checklist of the distinct conceptual elements required (2-6 items max).
        - From the student answer, identify up to **3 consecutive** lines (earliest occurrence) that might satisfy this point. If none exist → score 0 for this point.
        - For each checklist item, mark internally:
@@ -230,27 +230,27 @@ grade_prompt = ChatPromptTemplate.from_template(
        - **Do not** combine non-consecutive fragments or unrelated sentences to satisfy a single checklist item. Patchwork matches are invalid.
 
     3. Scoring rules (final decision)
-       - If **any** checklist item = NO → score = 0 for this annotation point (unless the annotation explicitly allows partial credit).
+       - If **any** checklist item = NO → score = 0 for the criteria point (unless the criteria explicitly allows partial credit).
        - If **all** checklist items = YES:
-           - If annotation specifies fractional/partial marks (e.g., "half for each"), apply that fraction exactly.
-           - If annotation does **not** allow partial credit, award the full marks assigned to that annotation point.
+           - If criteria specifies fractional/partial marks (e.g., "half for each"), apply that fraction exactly.
+           - If marking criteria does **not** allow partial credit, award the full marks assigned to that criteria point.
        - Never invent partial splits beyond those explicitly stated in marking criteria.
        - If uncertain at any stage → default to 0 (no guessing).
 
     4. Evidence selection policy
        - `correct_lines`: include the exact student lines (up to 3) that directly supported the awarded point. Keep punctuation/formatting identical.
-       - `correct_words`: from those `correct_lines`, include 2–6 word verbatim snippets that show the idea (only if present).
-       - If multiple student lines could match the same annotation, choose the earliest matching consecutive block.
+       - `correct_words`: from those `correct_lines`, include the 2–6 word verbatim snippets on the base of marks were assigned by comparing these with the model answers, correct words tells us breakdown too like only underline those main words that by combining can help in total marks assigned for the question.
+       - If multiple student lines could match the same marking criteria, choose the earliest matching consecutive block.
        - Do not include model-answer text in `correct_lines` or `comment`.
 
     5. No-leak / no-inference clause
        - Do not infer unstated facts, complete missing logic, or supply missing premises.
-       - Ambiguous or only-topically-related answers receive 0 unless the annotation explicitly allows partial credit.
+       - Ambiguous or only-topically-related answers receive 0 unless the criteria explicitly allows partial credit.
        - Do not defend or justify inferred marks — only produce the JSON with `comment`, `correct_lines`, and `correct_words` as required.
 
     6. Final verification (internal)
-       - Confirm every awarded mark maps to a single annotation point.
-       - Confirm no annotation point counted twice.
+       - Confirm every awarded mark maps to a single criteria point.
+       - Confirm no marking criteria point counted twice.
        - Confirm totals ≤ maximum_marks.
        - Confirm output will contain no model answer text.
        - Always answer in 0.5 or full like 1 never in between.
